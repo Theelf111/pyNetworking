@@ -1,0 +1,6 @@
+[project]
+name = "pyNetworking"
+version = "0.1"
+
+[tool.setuptools.packages]
+find = {}
