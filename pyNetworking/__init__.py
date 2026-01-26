@@ -10,10 +10,10 @@ publicKeyBytes = publicKey.save_pkcs1(format = "DER")
 
 newClients = []
 
-parsePacketFunctionsFromNames = {}
-parsePacketFunctionTypeSignatures = {}
-writePacketFunctions = []
-writePacketFunctionTypeSignatures = {}
+sendFunctions = []
+sendFunctionTypeSignatures = {}
+recvFunctionsFromNames = {}
+recvFunctionTypeSignatures = {}
 
 class Connection:
     def __init__(self, socket, address, port):
@@ -23,7 +23,7 @@ class Connection:
         self.key = None
         self.fernet = None
         
-        self.parsePacketFunctions = []
+        self.recvFunctions = []
 
         self.lock = threading.Lock()
         self.active = True
@@ -33,6 +33,29 @@ class Connection:
     def setKey(self, key):
         self.key = key
         self.fernet = Fernet(key)
+
+    def sendRaw(self, message):
+        try:
+            encrypted = self.fernet.encrypt(message)
+            self.socket.sendall(len(encrypted).to_bytes(4) + encrypted)
+        except Exception as e:
+            print(e)
+            self.close()
+            return
+
+    def send(self):
+        if not self.active:
+            return
+        message = b""
+        while self.toSend:
+            packet = self.toSend.pop(0)
+            message += len(packet).to_bytes(4) + packet
+        self.sendRaw(message)
+
+    def sendPacketTypes(self):
+        message = writeList((str, str), list(map(lambda t: (t.__name__, writeFunctionTypeSignatures[t]), writeFunctionTypesToCheck)))
+        message += writeList((str, str), list(map(lambda t: (t.__name__[4:], sendFunctionTypeSignatures[t]), sendFunctions)))
+        self.sendRaw(message)
 
     def recvN(self, n):
         if not self.active:
@@ -63,9 +86,9 @@ class Connection:
                 size, data = int.from_bytes(data[:4]), data[4:]
                 packet, data = data[:size], data[size:]
                 packetType, packetData = parseInt(packet)
-                if packetType >= len(self.parsePacketFunctions):
-                    raise Exception(f"Packet type id {packetType} outside range (must be from 0 to {len(self.parsePacketFunctions) - 1})")
-                self.parsePacketFunctions[packetType](packetData)
+                if packetType >= len(self.recvFunctions):
+                    raise Exception(f"Packet type id {packetType} outside range (must be from 0 to {len(self.recvFunctions) - 1})")
+                self.recvFunctions[packetType](packetData)
             return
         self.close()
 
@@ -82,37 +105,14 @@ class Connection:
                     raise Exception(f"Mismatching type signatures for parsing {name}, local is {parseFunctionTypeSignatures[t]}, remote is {info[1]}")
             for info in packetTypeInfo:
                 name = info[0]
-                if not name in parsePacketFunctionsFromNames:
+                if not name in recvFunctionsFromNames:
                     raise Exception(f"No local packet type named \"{name}\"")
-                t = parsePacketFunctionsFromNames[name]
-                if parsePacketFunctionTypeSignatures[t] != info[1]:
-                    raise Exception(f"Mismatching type signatures for packet type {name}, local is {parsePacketFunctionTypeSignatures[t]}, remote is {info[1]}")
-                self.parsePacketFunctions.append(t)
+                t = recvFunctionsFromNames[name]
+                if recvFunctionTypeSignatures[t] != info[1]:
+                    raise Exception(f"Mismatching type signatures for packet type {name}, local is {recvFunctionTypeSignatures[t]}, remote is {info[1]}")
+                self.recvFunctions.append(t)
             return
         self.close()
-
-    def sendRaw(self, message):
-        try:
-            encrypted = self.fernet.encrypt(message)
-            self.socket.sendall(len(encrypted).to_bytes(4) + encrypted)
-        except Exception as e:
-            print(e)
-            self.close()
-            return
-
-    def send(self):
-        if not self.active:
-            return
-        message = b""
-        while self.toSend:
-            packet = self.toSend.pop(0)
-            message += len(packet).to_bytes(4) + packet
-        self.sendRaw(message)
-
-    def sendPacketTypes(self):
-        message = writeList((str, str), list(map(lambda t: (t.__name__, writeFunctionTypeSignatures[t]), writeFunctionTypesToCheck)))
-        message += writeList((str, str), list(map(lambda t: (t.__name__[5:], writePacketFunctionTypeSignatures[t]), writePacketFunctions)))
-        self.sendRaw(message)
 
     def close(self, silent = False):
         if not self.active:
@@ -190,21 +190,24 @@ def typeToStr(t):
 intSize = 4
 intOffset = 2 ** (intSize * 8 - 1)
 
+def writeInt(n):
+    return (n + intOffset).to_bytes(intSize)
+
 def parseInt(data):
     if len(data) < intSize:
         raise Exception("parse too few bytes")
     return int.from_bytes(data[:intSize]) - intOffset, data[intSize:]
 
-def writeInt(n):
-    return (n + intOffset).to_bytes(intSize)
+def writeBool(b):
+    return b.to_bytes(1)
 
 def parseBool(data):
     if len(data) < 1:
         raise Exception("parse too few bytes")
     return bool(data[0]), data[1:]
 
-def writeBool(b):
-    return b.to_bytes(1)
+def writeBytes(bs):
+    return writeInt(len(bs)) + bs
 
 def parseBytes(data):
     size, data = parseInt(data)
@@ -212,24 +215,12 @@ def parseBytes(data):
         raise Exception("parse too few bytes")
     return data[:size], data[size:]
 
-def writeBytes(bs):
-    return writeInt(len(bs)) + bs
+def writeString(s):
+    return writeBytes(s.encode())
 
 def parseString(data):
     bs, data = parseBytes(data) 
     return bs.decode(), data
-
-def writeString(s):
-    return writeBytes(s.encode())
-
-parseFunctions = {
-    int : parseInt,
-    bool : parseBool,
-    bytes : parseBytes,
-    str : parseString
-}
-parseTypesFromNames = {}
-parseFunctionTypeSignatures = {}
 
 writeFunctions = {
     int : writeInt,
@@ -240,13 +231,14 @@ writeFunctions = {
 writeFunctionTypesToCheck = []
 writeFunctionTypeSignatures = {}
 
-def parseList(t, data):
-    size, data = parseInt(data)
-    l = []
-    for i in range(size):
-        result, data = parse(t, data)
-        l.append(result)
-    return l, data
+parseFunctions = {
+    int : parseInt,
+    bool : parseBool,
+    bytes : parseBytes,
+    str : parseString
+}
+parseTypesFromNames = {}
+parseFunctionTypeSignatures = {}
 
 def writeList(t, l):
     data = writeInt(len(l))
@@ -254,14 +246,13 @@ def writeList(t, l):
         data += write(t, x)
     return data
 
-def parse(t, data):
-    if type(t) == list and len(t) == 1:
-        return parseList(t[0], data)
-    elif type(t) == tuple:
-        return tuple((result := parse(t2, data), data := result[1])[0][0] for t2 in t), data
-    elif t in parseFunctions:
-        return parseFunctions[t](data)
-    print(f"Unrecognized parse type \"{t}\"")
+def parseList(t, data):
+    size, data = parseInt(data)
+    l = []
+    for i in range(size):
+        result, data = parse(t, data)
+        l.append(result)
+    return l, data
 
 def write(t, x):
     if type(t) == list and len(t) == 1:
@@ -272,17 +263,14 @@ def write(t, x):
         return writeFunctions[t](x)
     print(f"Unrecognized write type \"{t}\"")
 
-def parseFunction(*types):
-    def decorator(f):
-        def _f(data):
-            parsedArgs = []
-            for argType in types:
-                parsedArg, data = parse(argType, data)
-                parsedArgs.append(parsedArg)
-            return f(*parsedArgs), data
-        _f.__name__ = f.__name__
-        return _f
-    return decorator
+def parse(t, data):
+    if type(t) == list and len(t) == 1:
+        return parseList(t[0], data)
+    elif type(t) == tuple:
+        return tuple((result := parse(t2, data), data := result[1])[0][0] for t2 in t), data
+    elif t in parseFunctions:
+        return parseFunctions[t](data)
+    print(f"Unrecognized parse type \"{t}\"")
 
 def writeFunction(*types):
     def decorator(f):
@@ -299,13 +287,16 @@ def writeFunction(*types):
         return _f
     return decorator
 
-def parseable(*types):
-    def decorator(cls):
-        cls.parse = parseFunction(*types)(cls.parse)
-        parseFunction[cls] = cls.parse
-        parseTypesFromNames[cls.__name__] = cls
-        parseFunctionTypeSignatures[cls] = ",".join(map(typeToStr, types))
-        return cls
+def parseFunction(*types):
+    def decorator(f):
+        def _f(data):
+            parsedArgs = []
+            for argType in types:
+                parsedArg, data = parse(argType, data)
+                parsedArgs.append(parsedArg)
+            return f(*parsedArgs), data
+        _f.__name__ = f.__name__
+        return _f
     return decorator
 
 def writeable(*types):
@@ -317,40 +308,28 @@ def writeable(*types):
         return cls
     return decorator
 
-def parseWriteable(*types):
+def parseable(*types):
+    def decorator(cls):
+        cls.parse = parseFunction(*types)(cls.parse)
+        parseFunction[cls] = cls.parse
+        parseTypesFromNames[cls.__name__] = cls
+        parseFunctionTypeSignatures[cls] = ",".join(map(typeToStr, types))
+        return cls
+    return decorator
+
+def writeParseable(*types):
     def decorator(cls):
         cls = parseable(*types)(cls)
         cls = writeable(*types)(cls)
         return cls
     return decorator
 
-def parsePacket(*types):
+def sendFunction(*types, method = False):
     def decorator(f):
-        if f.__name__[:5] != "parse":
-            raise Exception(f"Invalid parsePacket function name \"{f.__name__}\", should begin with \"parse\"")
-        f = parseFunction(*types)(f)
-        def _f(data):
-            try:
-                f(data)
-            except Exception as e:
-                if e.args == ("parse too few bytes",):
-                    raise Exception(f"Insufficient bytes {data} for {f.__name__}")
-                else:
-                    raise e
-        _f.__name__ = f.__name__
-        if _f.__name__ in parsePacketFunctionsFromNames:
-            raise Exception(f"Duplicate parsePacket function name {_f.__name__}")
-        parsePacketFunctionsFromNames[_f.__name__[5:]] = _f
-        parsePacketFunctionTypeSignatures[_f] = ",".join(map(typeToStr, types))
-        return _f
-    return decorator
-
-def writePacket(*types, method = False):
-    def decorator(f):
-        if f.__name__[:5] != "write":
-            raise Exception(f"Invalid writePacket function name \"{f.__name__}\", should begin with \"write\"")
+        if f.__name__[:4] != "send":
+            raise Exception(f"Invalid sendFunction function name \"{f.__name__}\", should begin with \"send\"")
         f = writeFunction(*types)(f)
-        id = len(writePacketFunctions)
+        id = len(sendFunctions)
         if method:
             def _f(self, connection, *args, **kwargs):
                 if type(connection) != Connection:
@@ -362,9 +341,30 @@ def writePacket(*types, method = False):
                     raise Exception(f"Invalid connection passed to {f.__name__}")
                 connection.toSend.append(writeInt(id) + f(*args, **kwargs))
         _f.__name__ = f.__name__
-        writePacketFunctions.append(_f)
-        writePacketFunctionTypeSignatures[_f] = ",".join(map(typeToStr, types))
-        writePacketFunctions.append(_f)
+        sendFunctions.append(_f)
+        sendFunctionTypeSignatures[_f] = ",".join(map(typeToStr, types))
+        sendFunctions.append(_f)
+        return _f
+    return decorator
+
+def recvFunction(*types):
+    def decorator(f):
+        if f.__name__[:4] != "recv":
+            raise Exception(f"Invalid recvFunction function name \"{f.__name__}\", should begin with \"recv\"")
+        f = parseFunction(*types)(f)
+        def _f(data):
+            try:
+                f(data)
+            except Exception as e:
+                if e.args == ("parse too few bytes",):
+                    raise Exception(f"Insufficient bytes {data} for {f.__name__}")
+                else:
+                    raise e
+        _f.__name__ = f.__name__
+        if _f.__name__ in recvFunctionsFromNames:
+            raise Exception(f"Duplicate recvFunction function name {_f.__name__}")
+        recvFunctionsFromNames[_f.__name__[4:]] = _f
+        recvFunctionTypeSignatures[_f] = ",".join(map(typeToStr, types))
         return _f
     return decorator
 
@@ -386,18 +386,28 @@ def withId(*types):
             old__init__(self, *args, **kwargs)
             cls.all[self.id] = self
         cls.__init__ = __init__
-        if "parseInit" in dir(cls):
-            oldParseInit = cls.parseInit
-            def parseInit(id, *args):
+        if "sendInit" in dir(cls):
+            oldSendInit = cls.sendInit
+            def sendInit(self):
+                return self.id, *oldSendInit(self)
+            sendInit.__name__ += cls.__name__
+            cls.sendInit = sendFunction(int, *types, method = True)(sendInit)
+            def sendDel(self):
+                return (self.id,)
+            sendDel.__name__ += cls.__name__
+            cls.sendDel = sendFunction(int, method = True)(sendDel)
+        if "recvInit" in dir(cls):
+            oldRecvInit = cls.recvInit
+            def recvInit(id, *args):
                 if id in cls.all:
                     raise Exception(f"Invalid remote initialization, {cls.__name__} object with id {id} already exists")
                 x = cls.__new__(cls)
                 x.id = id
-                oldParseInit(x, *args)
+                oldRecvInit(x, *args)
                 cls.all[id] = x
-            parseInit.__name__ += cls.__name__
-            cls.parseInit = parsePacket(int, *types)(parseInit)
-            def parseDel(id):
+            recvInit.__name__ += cls.__name__
+            cls.recvInit = recvFunction(int, *types)(recvInit)
+            def recvDel(id):
                 x = cls.all[id]
                 if id in cls.all:
                     del cls.all[id]
@@ -405,18 +415,15 @@ def withId(*types):
                     raise Exception(f"Invalid deletion, no {cls.__name__} object with id {id}")
                 if "onDel" in dir(cls):
                     x.onDel()
-            parseDel.__name__ += cls.__name__
-            cls.parseDel = parsePacket(int)(parseDel)
-        if "writeInit" in dir(cls):
-            oldWriteInit = cls.writeInit
-            def writeInit(self):
-                return self.id, *oldWriteInit(self)
-            writeInit.__name__ += cls.__name__
-            cls.writeInit = writePacket(int, *types, method = True)(writeInit)
-            def writeDel(self):
-                return (self.id,)
-            writeDel.__name__ += cls.__name__
-            cls.writeDel = writePacket(int, method = True)(writeDel)
+            recvDel.__name__ += cls.__name__
+            cls.recvDel = recvFunction(int)(recvDel)
+        def write(self):
+            return (self.id,)
+        write.__name__ += cls.__name__
+        cls.write = writeFunction(int)(write)
+        writeFunctions[cls] = cls.write
+        writeFunctionTypesToCheck.append(cls)
+        writeFunctionTypeSignatures[cls] = "int"
         def parse(id):
             if id in cls.all:
                 return cls.all[id]
@@ -426,12 +433,5 @@ def withId(*types):
         parseFunctions[cls] = cls.parse
         parseTypesFromNames[cls.__name__] = cls
         parseFunctionTypeSignatures[cls] = "int"
-        def write(self):
-            return (self.id,)
-        write.__name__ += cls.__name__
-        cls.write = writeFunction(int)(write)
-        writeFunctions[cls] = cls.write
-        writeFunctionTypesToCheck.append(cls)
-        writeFunctionTypeSignatures[cls] = "int"
         return cls
     return decorator
