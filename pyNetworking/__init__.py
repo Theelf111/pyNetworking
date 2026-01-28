@@ -70,7 +70,7 @@ class Connection:
                 return
         return data
 
-    def recieveRaw(self):
+    def receiveRaw(self):
         if not self.active:
             return
         if data := self.recvN(4):
@@ -80,20 +80,36 @@ class Connection:
                 return data
         self.close()
 
-    def recieve(self):
-        if (data := self.recieveRaw()) != None:
+    def receive(self):
+        data = self.receiveRaw()
+        if data == None:
+            return
+        try:
             while data:
+                if len(data) < 4:
+                    raise Exception(f"Invalid message, {len(data)} bytes remain, should be 0 for message end or at least 4 for size of next packet")
                 size, data = int.from_bytes(data[:4]), data[4:]
+                if len(data) < size:
+                    raise Exception(f"Invalid message, {len(data)} bytes remain, expected packet of size {size}")
                 packet, data = data[:size], data[size:]
+                if len(packet) < intSize:
+                    raise Exception(f"Invalid packet, {len(data)} bytes long, should be at least {intSize} for packet type")
                 packetType, packetData = parseInt(packet)
                 if packetType >= len(self.recvFunctions):
-                    raise Exception(f"Packet type id {packetType} outside range (must be from 0 to {len(self.recvFunctions) - 1})")
-                self.recvFunctions[packetType](packetData)
-            return
-        self.close()
+                    raise Exception(f"Packet type id {packetType} outside range, should be from 0 to {len(self.recvFunctions) - 1}")
+                try:
+                    self.recvFunctions[packetType](packetData)
+                except Exception as e:
+                    raise Exception(f"{e}\nin function {self.recvFunctions[packetType].__name__}")
+        except Exception as e:
+            print(f"Error:\n{e}\nwhile receiving message")
+            self.close()
 
-    def recievePacketTypes(self):
-        if (data := self.recieveRaw()) != None:
+    def receivePacketTypes(self):
+        data = self.receiveRaw()
+        if data == None:
+            return
+        try:
             typeInfo, data = parseList((str, str), data)
             packetTypeInfo, data = parseList((str, str), data)
             for info in typeInfo:
@@ -111,8 +127,9 @@ class Connection:
                 if recvFunctionTypeSignatures[t] != info[1]:
                     raise Exception(f"Mismatching type signatures for packet type {name}, local is {recvFunctionTypeSignatures[t]}, remote is {info[1]}")
                 self.recvFunctions.append(t)
-            return
-        self.close()
+        except Exception as e:
+            print(f"Error:\n{e}\nwhile attempting to receive packet type info")
+            self.close()
 
     def close(self, silent = False):
         if not self.active:
@@ -139,18 +156,18 @@ def listener(port, password):
             socket.sendall(publicKeyBytes)
             passwordGuess = rsa.decrypt(connection.recvN(rsaEncryptedSize), privateKey)
             if passwordGuess != password.encode():
-                new.close(silent = True)
+                new.close()
                 continue
             socket.settimeout(None)
             symmetricKey = Fernet.generate_key()
             socket.sendall(rsa.encrypt(symmetricKey, remotePublicKey))
             connection.setKey(symmetricKey)
-            connection.recievePacketTypes()
+            connection.receivePacketTypes()
             connection.sendPacketTypes()
             newClients.append(connection)
         except Exception as e:
             print(e)
-            connection.close(silent = True)
+            connection.close()
 
 def listen(port, authKey):
     thread = threading.Thread(target = listener, args = (port, authKey), daemon = True)
@@ -170,7 +187,7 @@ def connect(address, port, password):
         symmetricKey = rsa.decrypt(connection.recvN(rsaEncryptedSize), privateKey)
         connection.setKey(symmetricKey)
         connection.sendPacketTypes()
-        connection.recievePacketTypes()
+        connection.receivePacketTypes()
         return connection
     except Exception as e:
         print(e)
