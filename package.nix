@@ -3,7 +3,7 @@
 }: let
   python = python313;
   pythonPkgs = python.pkgs;
-  inherit (pythonPkgs) buildPythonPackage;
+  inherit (pythonPkgs) buildPythonPackage rsa cryptography;
 in
   buildPythonPackage (final: {
     pname = "py-networking";
@@ -13,6 +13,11 @@ in
 
     propagatedBuildInputs = [
       python.pkgs.setuptools
+    ];
+
+    dependencies = [
+      rsa
+      cryptography
     ];
 
     pyproject = true;
