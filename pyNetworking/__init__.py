@@ -328,7 +328,7 @@ def writeable(*types):
 def parseable(*types):
     def decorator(cls):
         cls.parse = parseFunction(*types)(cls.parse)
-        parseFunction[cls] = cls.parse
+        parseFunctions[cls] = cls.parse
         parseTypesFromNames[cls.__name__] = cls
         parseFunctionTypeSignatures[cls] = ",".join(map(typeToStr, types))
         return cls
