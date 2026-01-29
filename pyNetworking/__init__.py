@@ -346,6 +346,7 @@ def writeFunctionForType(cls):
         def decorator(f):
             cls.write = f
             writeable(*types)(cls)
+            return cls.write
         return decorator
     return secondary
 
@@ -354,6 +355,7 @@ def parseFunctionForType(cls):
         def decorator(f):
             cls.parse = f
             parseable(*types)(cls)
+            return cls.parse
         return decorator
     return secondary
 
