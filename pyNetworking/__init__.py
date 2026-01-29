@@ -341,6 +341,22 @@ def writeParseable(*types):
         return cls
     return decorator
 
+def writeFunctionForType(cls):
+    def secondary(*types):
+        def decorator(f):
+            cls.write = f
+            writeable(*types)(cls)
+        return decorator
+    return secondary
+
+def parseFunctionForType(cls):
+    def secondary(*types):
+        def decorator(f):
+            cls.parse = f
+            parseable(*types)(cls)
+        return decorator
+    return secondary
+
 def sendFunction(*types, method = False):
     def decorator(f):
         if f.__name__[:4] != "send":
