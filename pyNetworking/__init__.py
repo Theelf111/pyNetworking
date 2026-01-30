@@ -1,5 +1,6 @@
 import socket as s
 import threading
+import struct
 import rsa
 from cryptography.fernet import Fernet
 
@@ -215,6 +216,25 @@ def parseInt(data):
         raise Exception("parse too few bytes")
     return int.from_bytes(data[:intSize]) - intOffset, data[intSize:]
 
+def writeFloat(x):
+    return struct.pack("f", x)
+
+def parseFloat(data):
+    if len(data) < 4:
+        raise Exception("parse too few bytes")
+    return struct.unpack("f", data[:4]), data[4:]
+
+class double:
+    pass
+
+def writeDouble(x):
+    return struct.pack("d", x)
+
+def parseDouble(data):
+    if len(data) < 8:
+        raise Exception("parse too few bytes")
+    return struct.unpack("d", data[:8]), data[8:]
+
 def writeBool(b):
     return b.to_bytes(1)
 
@@ -241,6 +261,8 @@ def parseString(data):
 
 writeFunctions = {
     int : writeInt,
+    float : writeFloat,
+    double : writeDouble,
     bool : writeBool,
     bytes : writeBytes,
     str : writeString
@@ -250,6 +272,8 @@ writeFunctionTypeSignatures = {}
 
 parseFunctions = {
     int : parseInt,
+    float : parseFloat,
+    double : parseDouble,
     bool : parseBool,
     bytes : parseBytes,
     str : parseString
