@@ -384,13 +384,13 @@ def parseFunctionForType(cls):
         return decorator
     return secondary
 
-def sendFunction(*types, method = False):
+def sendFunction(*types, methodOf = False):
     def decorator(f):
         if f.__name__[:4] != "send":
             raise Exception(f"Invalid sendFunction function name \"{f.__name__}\", should begin with \"send\"")
         f = writeFunction(*types)(f)
         id = len(sendFunctions)
-        if method:
+        if methodOf:
             def _f(self, connection, *args, **kwargs):
                 if type(connection) != Connection:
                     raise Exception(f"Invalid connection passed to {f.__name__}")
@@ -404,7 +404,10 @@ def sendFunction(*types, method = False):
         sendFunctions.append(_f)
         sendFunctionTypeSignatures[_f] = ",".join(map(typeToStr, types))
         sendFunctions.append(_f)
-        return _f
+        if methodOf:
+            type.__setattr__(methodOf, _f.__name__, _f)
+        else:
+            return _f
     return decorator
 
 def recvFunction(*types):
@@ -451,11 +454,11 @@ def withId(*types):
             def sendInit(self):
                 return self.id, *oldSendInit(self)
             sendInit.__name__ += cls.__name__
-            cls.sendInit = sendFunction(int, *types, method = True)(sendInit)
+            sendFunction(int, *types, methodOf = cls)(sendInit)
             def sendDel(self):
                 return (self.id,)
             sendDel.__name__ += cls.__name__
-            cls.sendDel = sendFunction(int, method = True)(sendDel)
+            sendFunction(int, methodOf = cls)(sendDel)
         if "recvInit" in dir(cls):
             oldRecvInit = cls.recvInit
             def recvInit(id, *args):
