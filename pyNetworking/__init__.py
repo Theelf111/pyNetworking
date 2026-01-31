@@ -146,6 +146,7 @@ class Connection:
 
 def listener(port, password):
     listenerSocket = s.socket()
+    listenerSocket.setsockopt(s.SOL_SOCKET, s.SO_REUSEADDR, 1)
     listenerSocket.bind(("", port))
     listenerSocket.listen(1)
     while True:
