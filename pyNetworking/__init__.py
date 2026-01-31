@@ -384,7 +384,9 @@ def parseFunctionForType(cls):
         return decorator
     return secondary
 
-def sendFunction(*types, methodOf = False):
+def sendFunction(*types, methodOf = False, sendSelf = True):
+    if methodOf and sendSelf:
+        types = (methodOf,) + types
     def decorator(f):
         if f.__name__[:4] != "send":
             raise Exception(f"Invalid sendFunction function name \"{f.__name__}\", should begin with \"send\"")
@@ -401,16 +403,20 @@ def sendFunction(*types, methodOf = False):
                     raise Exception(f"Invalid connection passed to {f.__name__}")
                 connection.toSend.append(writeInt(id) + f(*args, **kwargs))
         _f.__name__ = f.__name__
+        if methodOf:
+            _f.__name__ += methodOf.__name__
         sendFunctions.append(_f)
         sendFunctionTypeSignatures[_f] = ",".join(map(typeToStr, types))
         sendFunctions.append(_f)
         if methodOf:
-            type.__setattr__(methodOf, _f.__name__, _f)
+            type.__setattr__(methodOf, f.__name__, _f)
         else:
             return _f
     return decorator
 
-def recvFunction(*types):
+def recvFunction(*types, methodOf = False, recvSelf = True):
+    if methodOf and recvSelf:
+        types = (methodOf,) + types
     def decorator(f):
         if f.__name__[:4] != "recv":
             raise Exception(f"Invalid recvFunction function name \"{f.__name__}\", should begin with \"recv\"")
@@ -424,11 +430,16 @@ def recvFunction(*types):
                 else:
                     raise e
         _f.__name__ = f.__name__
+        if methodOf:
+            _f.__name__ += methodOf.__name__
         if _f.__name__ in recvFunctionsFromNames:
             raise Exception(f"Duplicate recvFunction function name {_f.__name__}")
         recvFunctionsFromNames[_f.__name__[4:]] = _f
         recvFunctionTypeSignatures[_f] = ",".join(map(typeToStr, types))
-        return _f
+        if methodOf:
+            type.__setattr__(methodOf, f.__name__, _f)
+        else:
+            return _f
     return decorator
 
 def withId(*types):
@@ -453,12 +464,10 @@ def withId(*types):
             oldSendInit = cls.sendInit
             def sendInit(self):
                 return self.id, *oldSendInit(self)
-            sendInit.__name__ += cls.__name__
-            sendFunction(int, *types, methodOf = cls)(sendInit)
+            sendFunction(int, *types, methodOf = cls, sendSelf = False)(sendInit)
             def sendDel(self):
-                return (self.id,)
-            sendDel.__name__ += cls.__name__
-            sendFunction(int, methodOf = cls)(sendDel)
+                return (self,)
+            sendFunction(methodOf = cls)(sendDel)
         if "recvInit" in dir(cls):
             oldRecvInit = cls.recvInit
             def recvInit(id, *args):
@@ -468,18 +477,15 @@ def withId(*types):
                 x.id = id
                 oldRecvInit(x, *args)
                 cls.all[id] = x
-            recvInit.__name__ += cls.__name__
-            cls.recvInit = recvFunction(int, *types)(recvInit)
-            def recvDel(id):
-                x = cls.all[id]
+            recvFunction(int, *types, methodOf = cls, recvSelf = False)(recvInit)
+            def recvDel(self):
                 if id in cls.all:
-                    del cls.all[id]
+                    del cls.all[self.id]
                 else:
                     raise Exception(f"Invalid deletion, no {cls.__name__} object with id {id}")
                 if "onDel" in dir(cls):
-                    x.onDel()
-            recvDel.__name__ += cls.__name__
-            cls.recvDel = recvFunction(int)(recvDel)
+                    self.onDel()
+            recvFunction(methodOf = cls)(recvDel)
         def write(self):
             return (self.id,)
         write.__name__ += cls.__name__
