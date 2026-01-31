@@ -223,7 +223,7 @@ def writeFloat(x):
 def parseFloat(data):
     if len(data) < 4:
         raise Exception("parse too few bytes")
-    return struct.unpack("f", data[:4]), data[4:]
+    return struct.unpack("f", data[:4])[0], data[4:]
 
 class double:
     pass
