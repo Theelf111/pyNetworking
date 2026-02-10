@@ -144,12 +144,13 @@ class Connection:
             pass
         self.socket.close()
 
-def listener(port, password):
+def listener(port, password, targetClientCount = 0):
     listenerSocket = s.socket()
     listenerSocket.setsockopt(s.SOL_SOCKET, s.SO_REUSEADDR, 1)
     listenerSocket.bind(("", port))
     listenerSocket.listen(1)
-    while True:
+    clientCount = 0
+    while targetClientCount == 0 or clientCount < targetClientCount:
         socket, (address, port) = listenerSocket.accept()
         connection = Connection(socket, address, port)
         try:
@@ -167,12 +168,13 @@ def listener(port, password):
             connection.receivePacketTypes()
             connection.sendPacketTypes()
             newClients.append(connection)
+            clientCount += 1
         except Exception as e:
             print(e)
             connection.close()
 
-def listen(port, authKey):
-    thread = threading.Thread(target = listener, args = (port, authKey), daemon = True)
+def listen(port, password, targetClientCount = 0):
+    thread = threading.Thread(target = listener, args = (port, password), kwargs = {"targetClientCount" : targetClientCount}, daemon = True)
     thread.start()
     return thread
 
