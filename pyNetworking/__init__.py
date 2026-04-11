@@ -17,10 +17,11 @@ recvFunctionsFromNames = {}
 recvFunctionTypeSignatures = {}
 
 class Connection:
-    def __init__(self, socket, address, port):
+    def __init__(self, socket, address, port, info = None):
         self.socket = socket
         self.address = address
         self.port = port
+        self.info = info
         self.key = None
         self.fernet = None
         
@@ -99,7 +100,7 @@ class Connection:
                 if packetType >= len(self.recvFunctions):
                     raise Exception(f"Packet type id {packetType} outside range, should be from 0 to {len(self.recvFunctions) - 1}")
                 try:
-                    self.recvFunctions[packetType](packetData)
+                    self.recvFunctions[packetType](self, packetData)
                 except Exception as e:
                     raise Exception(f"{e}\nin function {self.recvFunctions[packetType].__name__}")
         except Exception as e:
@@ -331,15 +332,24 @@ def writeFunction(*types):
         return _f
     return decorator
 
-def parseFunction(*types):
+def parseFunction(*types, takesContext = False):
     def decorator(f):
-        def _f(data):
-            parsedArgs = []
-            for argType in types:
-                parsedArg, data = parse(argType, data)
-                parsedArgs.append(parsedArg)
-            return f(*parsedArgs), data
-        _f.__name__ = f.__name__
+        if takesContext:
+            def _f(context, data):
+                parsedArgs = []
+                for argType in types:
+                    parsedArg, data = parse(argType, data)
+                    parsedArgs.append(parsedArg)
+                return f(context, *parsedArgs), data
+            _f.__name__ = f.__name__
+        else:
+            def _f(data):
+                parsedArgs = []
+                for argType in types:
+                    parsedArg, data = parse(argType, data)
+                    parsedArgs.append(parsedArg)
+                return f(*parsedArgs), data
+            _f.__name__ = f.__name__
         return _f
     return decorator
 
@@ -422,10 +432,10 @@ def recvFunction(*types, methodOf = False, recvSelf = True):
     def decorator(f):
         if f.__name__[:4] != "recv":
             raise Exception(f"Invalid recvFunction function name \"{f.__name__}\", should begin with \"recv\"")
-        f = parseFunction(*types)(f)
-        def _f(data):
+        f = parseFunction(*types, takesContext = True)(f)
+        def _f(connection, data):
             try:
-                f(data)
+                f(connection, data)
             except Exception as e:
                 if e.args == ("parse too few bytes",):
                     raise Exception(f"Insufficient bytes {data} for {f.__name__}")
