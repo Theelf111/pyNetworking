@@ -487,7 +487,7 @@ def withId(*types):
                     raise Exception(f"Invalid remote initialization, {cls.__name__} object with id {id} already exists")
                 x = cls.__new__(cls)
                 x.id = id
-                oldRecvInit(x, *args)
+                oldRecvInit(connection, x, *args)
                 cls.all[id] = x
             recvFunction(int, *types, methodOf = cls, recvSelf = False)(recvInit)
             def recvDel(connection, self):
@@ -496,7 +496,7 @@ def withId(*types):
                 else:
                     raise Exception(f"Invalid deletion, no {cls.__name__} object with id {id}")
                 if "onDel" in dir(cls):
-                    self.onDel()
+                    cls.onDel(connection, self)
             recvFunction(methodOf = cls)(recvDel)
         def write(self):
             return (self.id,)
