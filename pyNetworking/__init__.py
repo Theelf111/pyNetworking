@@ -482,7 +482,7 @@ def withId(*types):
             sendFunction(methodOf = cls)(sendDel)
         if "recvInit" in dir(cls):
             oldRecvInit = cls.recvInit
-            def recvInit(id, *args):
+            def recvInit(connection, id, *args):
                 if id in cls.all:
                     raise Exception(f"Invalid remote initialization, {cls.__name__} object with id {id} already exists")
                 x = cls.__new__(cls)
@@ -490,7 +490,7 @@ def withId(*types):
                 oldRecvInit(x, *args)
                 cls.all[id] = x
             recvFunction(int, *types, methodOf = cls, recvSelf = False)(recvInit)
-            def recvDel(self):
+            def recvDel(connection, self):
                 if id in cls.all:
                     del cls.all[self.id]
                 else:
