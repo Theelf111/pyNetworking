@@ -13,7 +13,7 @@ newClients = []
 
 sendFunctions = []
 sendFunctionTypeSignatures = {}
-recvFunctionsFromNames = {}
+recvFunctions = []
 recvFunctionTypeSignatures = {}
 
 class Connection:
@@ -112,6 +112,12 @@ class Connection:
         if data == None:
             return
         try:
+            recvFunctionsFromNames = {}
+            for f in recvFunctions:
+                name = f.__name__[4:]
+                if name in recvFunctionsFromNames:
+                    raise Exception(f"Duplicate recvFunction function name {_f.__name__}")
+                recvFunctionsFromNames[name] = f
             typeInfo, data = parseList((str, str), data)
             packetTypeInfo, data = parseList((str, str), data)
             for info in typeInfo:
@@ -324,32 +330,17 @@ def writeFunction(*types):
             if len(xs) != len(types):
                 print(f"Mismatching list sizes between {types} and {xs} in function {f.__name__}")
                 return
-            data = b""
-            for i in range(len(types)):
-                data += write(types[i], xs[i])
-            return data
+            return write(types, xs)
         _f.__name__ = f.__name__
         return _f
     return decorator
 
-def parseFunction(*types, takesContext = False):
+def parseFunction(*types):
     def decorator(f):
-        if takesContext:
-            def _f(context, data):
-                parsedArgs = []
-                for argType in types:
-                    parsedArg, data = parse(argType, data)
-                    parsedArgs.append(parsedArg)
-                return f(context, *parsedArgs), data
-            _f.__name__ = f.__name__
-        else:
-            def _f(data):
-                parsedArgs = []
-                for argType in types:
-                    parsedArg, data = parse(argType, data)
-                    parsedArgs.append(parsedArg)
-                return f(*parsedArgs), data
-            _f.__name__ = f.__name__
+        def _f(data):
+            parsedArgs, data = parse(types, data)
+            return f(*parsedArgs), data
+        _f.__name__ = f.__name__
         return _f
     return decorator
 
@@ -396,15 +387,44 @@ def parseFunctionForType(cls):
         return decorator
     return secondary
 
-def sendFunction(*types, methodOf = False, sendSelf = True):
-    if methodOf and sendSelf:
-        types = (methodOf,) + types
+class Self:
+    pass
+
+class selfSendFunction:
+    def __init__(self, f, types):
+        self.f = f
+        self.types = types
+
+class selfRecvFunction(selfSendFunction):
+    pass
+
+def networkingClass(cls):
+    attrs = dict(vars(cls))
+    for attrName in attrs:
+        attr = attrs[attrName]
+        if attr in sendFunctions or attr in recvFunctions:
+            attr.__name__ += f"_{cls.__name__}"
+        elif type(attr) in (selfSendFunction, selfRecvFunction):
+            f = attr.f
+            types = tuple(cls if t == Self else t for t in attr.types)
+            f.__name__ += f"_{cls.__name__}"
+            if type(attr) == selfSendFunction:
+                f = sendFunction(*types)(f)
+            else:
+                f = recvFunction(*types)(f)
+            type.__setattr__(cls, attrName, f)
+    return cls
+
+def sendFunction(*types):
     def decorator(f):
+        if Self in types:
+            return selfSendFunction(f, types)
         if f.__name__[:4] != "send":
             raise Exception(f"Invalid sendFunction function name \"{f.__name__}\", should begin with \"send\"")
-        f = writeFunction(*types)(f)
+        takesSelf = f.__code__.co_argcount and f.__code__.co_varnames[0] == "self"
+        f = writeFunction(*filter(lambda t: t != Connection, types))(f)
         id = len(sendFunctions)
-        if methodOf:
+        if takesSelf:
             def _f(self, connection, *args, **kwargs):
                 if type(connection) != Connection:
                     raise Exception(f"Invalid connection passed to {f.__name__}")
@@ -415,49 +435,39 @@ def sendFunction(*types, methodOf = False, sendSelf = True):
                     raise Exception(f"Invalid connection passed to {f.__name__}")
                 connection.toSend.append(writeInt(id) + f(*args, **kwargs))
         _f.__name__ = f.__name__
-        if methodOf:
-            _f.__name__ += methodOf.__name__
         sendFunctions.append(_f)
         sendFunctionTypeSignatures[_f] = ",".join(map(typeToStr, types))
-        sendFunctions.append(_f)
-        if methodOf:
-            type.__setattr__(methodOf, f.__name__, _f)
-        else:
-            return _f
+        return _f
     return decorator
 
-def recvFunction(*types, methodOf = False, recvSelf = True):
-    if methodOf and recvSelf:
-        types = (methodOf,) + types
+def recvFunction(*types):
     def decorator(f):
+        if Self in types:
+            return selfRecvFunction(f, types)
         if f.__name__[:4] != "recv":
             raise Exception(f"Invalid recvFunction function name \"{f.__name__}\", should begin with \"recv\"")
-        f = parseFunction(*types, takesContext = True)(f)
+        #f = parseFunction(*types, takesContext = True)(f)
         def _f(connection, data):
             try:
-                f(connection, data)
+                args, _ = parse(tuple(filter(lambda t: t != Connection, types)), data)
+                i = 0
+                f(*((connection if t == Connection else (args[i], i := i + 1)[0]) for t in types))
             except Exception as e:
                 if e.args == ("parse too few bytes",):
                     raise Exception(f"Insufficient bytes {data} for {f.__name__}")
                 else:
                     raise e
         _f.__name__ = f.__name__
-        if methodOf:
-            _f.__name__ += methodOf.__name__
-        if _f.__name__ in recvFunctionsFromNames:
-            raise Exception(f"Duplicate recvFunction function name {_f.__name__}")
-        recvFunctionsFromNames[_f.__name__[4:]] = _f
+        recvFunctions.append(_f)
         recvFunctionTypeSignatures[_f] = ",".join(map(typeToStr, types))
-        if methodOf:
-            type.__setattr__(methodOf, f.__name__, _f)
-        else:
-            return _f
+        return _f
     return decorator
 
 def withId(*types):
     def decorator(cls):
         cls.all = {}
         cls.nextId = 0
+
         old__init__ = cls.__init__
         def __init__(self, *args, id = None, **kwargs):
             if id != None:
@@ -472,32 +482,32 @@ def withId(*types):
             old__init__(self, *args, **kwargs)
             cls.all[self.id] = self
         cls.__init__ = __init__
-        if "sendInit" in dir(cls):
+
+        if "sendInit" in vars(cls):
             oldSendInit = cls.sendInit
             def sendInit(self):
                 return self.id, *oldSendInit(self)
-            sendFunction(int, *types, methodOf = cls, sendSelf = False)(sendInit)
+            cls.sendInit = sendFunction(int, *types)(sendInit)
             def sendDel(self):
                 return (self,)
-            sendFunction(methodOf = cls)(sendDel)
-        if "recvInit" in dir(cls):
+            cls.sendDel = sendFunction(cls)(sendDel)
+        if "recvInit" in vars(cls):
             oldRecvInit = cls.recvInit
-            def recvInit(connection, id, *args):
+            def recvInit(id, *args):
                 if id in cls.all:
                     raise Exception(f"Invalid remote initialization, {cls.__name__} object with id {id} already exists")
                 x = cls.__new__(cls)
                 x.id = id
-                oldRecvInit(connection, x, *args)
+                oldRecvInit(x, *args)
                 cls.all[id] = x
-            recvFunction(int, *types, methodOf = cls, recvSelf = False)(recvInit)
-            def recvDel(connection, self):
-                if id in cls.all:
-                    del cls.all[self.id]
-                else:
-                    raise Exception(f"Invalid deletion, no {cls.__name__} object with id {id}")
-                if "onDel" in dir(cls):
-                    cls.onDel(connection, self)
-            recvFunction(methodOf = cls)(recvDel)
+            cls.recvInit = recvFunction(int, *types)(recvInit)
+            def recvDel(self):
+                del cls.all[self.id]
+                if "onDel" in vars(cls):
+                    cls.onDel(self)
+            cls.recvDel = recvFunction(cls)(recvDel)
+        cls = networkingClass(cls)
+
         def write(self):
             return (self.id,)
         write.__name__ += cls.__name__
