@@ -235,7 +235,7 @@ def isOfType(t, x):
         return type(x) == tuple and len(t) == len(x) and all(isOfType(t[i], x[i]) for i in range(len(x)))
     elif type(t) == SumType:
         return any(isOfType(t2, x) for t2 in t.types)
-    elif "storedAs" in dir(t):
+    elif "storedAs" in dir(t) and t.storedAs != t:
         return isOfType(t.storedAs, x)
     return type(x) == t
 
