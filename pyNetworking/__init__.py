@@ -205,15 +205,37 @@ def connect(address, port, password):
         print(f"Failed to connect to {address}:{port}")
         socket.close()
 
+'''
+def isWriteableTypeType(t):
+    if type(t) == list:
+        return len(t) == 1 and isWriteableTypeType(t[0])
+    elif type(t) == tuple:
+        return all(map(isWriteableTypeType, t))
+    elif type(t) == SumType:
+        return all(map(isWriteableTypeType, t.types))
+    return t in writeFunctions
+'''
+
 def typeToStr(t):
     if type(t) == list and len(t) == 1:
         return f"[{typeToStr(t[0])}]"
     elif type(t) == tuple:
         return f"({",".join(map(typeToStr, t))})"
+    elif type(t) == SumType:
+        return "|".join(map(typeToStr, t.types))
     try:
         return t.__name__
     except:
         raise Exception(f"Unrecognized type \"{t}\" in typeToStr")
+
+def isOfType(t, x):
+    if type(t) == list and len(t) == 1:
+        return type(x) == list and all(isOfType(t[0], y) for y in x)
+    elif type(t) == tuple:
+        return type(x) == tuple and len(t) == len(x) and all(isOfType(t[i], x[i]) for i in range(len(x)))
+    elif type(t) == SumType:
+        return any(isOfType(t2, x) for t2 in t.types)
+    return type(x) == t
 
 intSize = 4
 intOffset = 2 ** (intSize * 8 - 1)
@@ -305,11 +327,21 @@ def parseList(t, data):
         l.append(result)
     return l, data
 
+class SumType:
+    def __init__(self, *args):
+        self.types = args
+
+    def __str__(self):
+        return " | ".join(map(str, self.types))
+
 def write(t, x):
     if type(t) == list and len(t) == 1:
         return writeList(t[0], x)
     elif type(t) == tuple:
         return b"".join(write(t[i], x[i]) for i in range(len(t)))
+    elif type(t) == SumType:
+        i = (isOfType(t2, x) for t2 in t.types).index(True)
+        return writeInt(i) + write(t[i], x)
     elif t in writeFunctions:
         return writeFunctions[t](x)
     print(f"Unrecognized write type \"{t}\"")
@@ -319,6 +351,9 @@ def parse(t, data):
         return parseList(t[0], data)
     elif type(t) == tuple:
         return tuple((result := parse(t2, data), data := result[1])[0][0] for t2 in t), data
+    elif type(t) == SumType:
+        i, data = parseInt(data)
+        return parse(t.types[i], data)
     elif t in parseFunctions:
         return parseFunctions[t](data)
     print(f"Unrecognized parse type \"{t}\"")
@@ -327,8 +362,13 @@ def writeFunction(*types):
     def decorator(f):
         def _f(*args, **kwargs):
             xs = f(*args, **kwargs)
+            '''
             if len(xs) != len(types):
                 print(f"Mismatching list sizes between {types} and {xs} in function {f.__name__}")
+                return
+            '''
+            if not isOfType(types, xs):
+                print(f"Mismathing return type in function {f.__name__}, expected return value of type:\n    {types}\ngot return value:\n    {xs}")
                 return
             return write(types, xs)
         _f.__name__ = f.__name__
