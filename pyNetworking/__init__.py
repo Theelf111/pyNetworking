@@ -293,13 +293,20 @@ def parseString(data):
     bs, data = parseBytes(data) 
     return bs.decode(), data
 
+def writeNone():
+    return b""
+
+def parseNone(data):
+    return None, data
+
 writeFunctions = {
     int : writeInt,
     float : writeFloat,
     double : writeDouble,
     bool : writeBool,
     bytes : writeBytes,
-    str : writeString
+    str : writeString,
+    type(None) : writeNone
 }
 writeFunctionTypesToCheck = []
 writeFunctionTypeSignatures = {}
@@ -310,7 +317,8 @@ parseFunctions = {
     double : parseDouble,
     bool : parseBool,
     bytes : parseBytes,
-    str : parseString
+    str : parseString,
+    type(None) : parseNone
 }
 parseTypesFromNames = {}
 parseFunctionTypeSignatures = {}
@@ -335,6 +343,9 @@ class SumType:
 
     def __str__(self):
         return " | ".join(map(str, self.types))
+
+def maybe(t):
+    return SumType(t, type(None))
 
 def write(t, x):
     if type(t) == list and len(t) == 1:
